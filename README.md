@@ -1,0 +1,126 @@
+# 心力驱动微信机器人
+
+一个基于微信桌面版和阿里云百炼 AI 的智能问答机器人，可以在指定群聊中自动回复以"#举手"开头的问题。
+
+## 功能特点
+
+- 监听指定微信群聊消息
+- 识别"#举手"触发关键词
+- 调用阿里云百炼 AI 服务生成智能回复
+- 消息级去重和问题级去重机制
+- 支持消息引用回复
+
+## 环境要求
+
+- Python 3.7+
+- Windows 系统（微信桌面版）
+- 微信桌面版 4.0.5
+- wxauto4 开源版
+
+## 安装步骤
+
+### 1. 克隆项目
+
+```bash
+git clone https://github.com/duomiyang168/heart-driven-wechat-robot.git
+cd heart-driven-wechat-robot
+```
+
+### 2. 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. 配置环境变量
+
+复制 `.env.example` 文件并重命名为 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env` 文件，填入你的阿里云百炼 API Key：
+
+```
+DASHSCOPE_API_KEY=your_dashscope_api_key_here
+```
+
+### 4. 配置群聊名称
+
+编辑 `newmain.py` 文件，修改目标群聊名称：
+
+```python
+TARGET_GROUP_NAME = "你的群聊名称"  # 修改为实际的群聊名称
+```
+
+## 使用方法
+
+### 1. 启动微信桌面版
+
+确保微信桌面版已登录并保持运行状态。
+
+### 2. 运行机器人
+
+```bash
+python newmain.py
+```
+
+### 3. 在群聊中使用
+
+在配置的群聊中发送消息：
+
+```
+#举手 如何学习 Python？
+```
+
+机器人会自动调用阿里云百炼 AI 服务生成回复。
+
+## 获取阿里云百炼 API Key
+
+1. 访问 [阿里云百炼控制台](https://dashscope.console.aliyun.com/apiKey)
+2. 登录阿里云账号
+3. 创建或获取 API Key
+4. 将 API Key 填入 `.env` 文件
+
+## 配置说明
+
+在 `newmain.py` 中可以修改以下配置：
+
+- `TARGET_GROUP_NAME`: 目标群聊名称
+- `TRIGGER_PREFIX`: 触发关键词（默认为"#举手"）
+- `APP_ID`: 阿里云百炼应用 ID
+- `REPLY_TEMPLATE`: 回复消息模板
+- `MAX_QUESTIONS_CACHE_SIZE`: 问题去重缓存大小
+
+## 注意事项
+
+- 请确保微信桌面版版本为 4.0.5
+- 请勿在 `.env` 文件中泄露 API Key
+- 建议在测试群聊中先行测试
+- 机器人需要微信保持登录状态
+
+## 依赖说明
+
+- `wxauto4`: 微信自动化库
+- `dashscope`: 阿里云百炼 AI SDK
+- `python-dotenv`: 环境变量管理
+
+## 许可证
+
+本项目仅供学习和研究使用。
+
+## 常见问题
+
+### Q: 机器人无法启动？
+A: 请检查微信桌面版是否已登录，版本是否为 4.0.5。
+
+### Q: 机器人不回复消息？
+A: 请检查群聊名称是否配置正确，API Key 是否有效。
+
+### Q: 如何修改触发关键词？
+A: 编辑 `newmain.py` 中的 `TRIGGER_PREFIX` 变量。
+
+## 联系方式
+
+如有问题或建议，请提交 Issue 或 Pull Request。

@@ -1,0 +1,8 @@
+# 微信自动化库
+wxauto4
+
+# 阿里云百炼 AI 服务
+dashscope
+
+# 环境变量管理
+python-dotenv
