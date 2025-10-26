@@ -233,8 +233,11 @@ def send_quote_reply(msg: Message, text: str, chat, timeout: int = 5) -> bool:
     # 优先使用 msg.quote() 方法发送引用回复
     try:
         if hasattr(msg, "quote") and callable(msg.quote):
+            print(f"[调试] 尝试使用 msg.quote() 发送引用回复...")
             # quote() 方法返回 WxResponse 对象
             response = msg.quote(text, timeout=timeout)
+
+            print(f"[调试] msg.quote() 返回值类型: {type(response)}, 值: {response}")
 
             # 检查返回值
             if response and hasattr(response, "success"):
@@ -242,45 +245,64 @@ def send_quote_reply(msg: Message, text: str, chat, timeout: int = 5) -> bool:
                     print(f"[引用回复成功] 使用 msg.quote() 发送")
                     return True
                 else:
-                    print(f"[引用回复失败] {response.message if hasattr(response, 'message') else '未知错误'}")
+                    msg_text = response.message if hasattr(response, 'message') else '未知错误'
+                    print(f"[引用回复失败] response.success=False, 错误信息: {msg_text}")
+                    # 失败时继续尝试降级方案
             else:
-                # 如果返回值不是 WxResponse，假定成功
-                print(f"[引用回复成功] 使用 msg.quote() 发送")
-                return True
+                # 如果返回值是 None 或没有 success 属性，说明调用失败
+                print(f"[引用回复失败] msg.quote() 返回了无效响应: {response}")
+                # 继续尝试降级方案
     except Exception as e:
         print(f"[引用回复异常] msg.quote() 调用失败：{e}")
+        import traceback
+        traceback.print_exc()
 
     # 如果引用失败，降级为普通消息发送（使用 chat.SendMsg）
     try:
         if hasattr(chat, "SendMsg") and callable(chat.SendMsg):
+            print(f"[调试] 降级使用 chat.SendMsg() 发送普通消息...")
             response = chat.SendMsg(text)
+
+            print(f"[调试] chat.SendMsg() 返回值类型: {type(response)}, 值: {response}")
+
             if response and hasattr(response, "success"):
                 if response.success:
                     print(f"[普通回复成功] 使用 chat.SendMsg() 发送")
                     return True
                 else:
-                    print(f"[普通回复失败] {response.message if hasattr(response, 'message') else '未知错误'}")
+                    msg_text = response.message if hasattr(response, 'message') else '未知错误'
+                    print(f"[普通回复失败] response.success=False, 错误信息: {msg_text}")
+                    # 失败时继续尝试降级方案
             else:
-                print(f"[普通回复成功] 使用 chat.SendMsg() 发送")
-                return True
+                print(f"[普通回复失败] chat.SendMsg() 返回了无效响应: {response}")
+                # 继续尝试最后的降级方案
     except Exception as e:
         print(f"[发送异常] chat.SendMsg() 调用失败：{e}")
+        import traceback
+        traceback.print_exc()
 
     # 最后尝试 wx.SendMsg（不推荐，因为在子窗口模式下可能不工作）
     try:
+        print(f"[调试] 最后降级使用 wx.SendMsg() 发送...")
         response = wx.SendMsg(text)
+
+        print(f"[调试] wx.SendMsg() 返回值类型: {type(response)}, 值: {response}")
+
         if response and hasattr(response, "success"):
             if response.success:
                 print(f"[普通回复成功] 使用 wx.SendMsg() 发送")
                 return True
             else:
-                print(f"[普通回复失败] {response.message if hasattr(response, 'message') else '未知错误'}")
+                msg_text = response.message if hasattr(response, 'message') else '未知错误'
+                print(f"[普通回复失败] response.success=False, 错误信息: {msg_text}")
         else:
-            print(f"[普通回复成功] 使用 wx.SendMsg() 发送")
-            return True
+            print(f"[普通回复失败] wx.SendMsg() 返回了无效响应: {response}")
     except Exception as e:
         print(f"[发送异常] wx.SendMsg() 调用失败：{e}")
+        import traceback
+        traceback.print_exc()
 
+    print(f"[发送失败] 所有发送方法均失败")
     return False
 
 def process_question_task(task: QuestionTask) -> None:
