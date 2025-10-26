@@ -40,12 +40,13 @@ APP_ID = "0365f84c253a45698bbfe362eb52c5ba"
 REPLY_TEMPLATE = "\n{answer}";
 # REPLY_TEMPLATE = "收到~ 你的问题是：{question}\n\n这是心力助手的回答：\n\n{answer}"
 
-# 消息级去重：防止同一条消息被重复触发
-processed_messages: Set[Tuple[str, str, str]] = set()
+# 消息级去重：使用 msg.hash 属性防止同一条消息被重复触发
+processed_message_hashes: Set[str] = set()
 
 # 问题级去重：防止同一问题被多次回答
 processed_questions: Set[str] = set()
 MAX_QUESTIONS_CACHE_SIZE = 500  # 简单上限，超过后清空（你也可以改成更精细的LRU）
+MAX_MESSAGE_HASH_SIZE = 1000   # 消息hash缓存上限
 
 # ===== 问题队列配置 =====
 @dataclass
@@ -97,32 +98,43 @@ def remember_question_once(q: str) -> bool:
 
 def get_chat_name(chat) -> str:
     """获取聊天窗口名称（群名或好友名）"""
-    name = ""
     try:
-        name = getattr(chat, "who", "") or ""
-        if not name and hasattr(chat, "ChatInfo"):
-            info = chat.ChatInfo() or {}
-            name = info.get("chat_name", "") or name
-    except Exception:
-        pass
-    return str(name).strip()
+        # 优先使用 who 属性
+        if hasattr(chat, "who"):
+            name = str(chat.who).strip()
+            if name:
+                return name
+        # 其次使用 ChatInfo() 方法
+        if hasattr(chat, "ChatInfo"):
+            info = chat.ChatInfo()
+            if isinstance(info, dict):
+                chat_name = info.get("chat_name", "")
+                if chat_name:
+                    return str(chat_name).strip()
+    except Exception as e:
+        print(f"[警告] 获取聊天名称失败：{e}")
+    return ""
 
 def is_group_chat(chat) -> bool:
-    """判断是否群聊：通过 chat.chat_type 或 ChatInfo()"""
+    """判断是否群聊：使用 chat.chat_type 属性"""
     try:
-        ctype = getattr(chat, "chat_type", None)
-        if isinstance(ctype, str):
-            return ctype == "group"
+        # 直接使用 chat_type 属性
+        if hasattr(chat, "chat_type"):
+            return str(chat.chat_type) == "group"
+        # 降级使用 ChatInfo() 方法
         if hasattr(chat, "ChatInfo"):
-            info = chat.ChatInfo() or {}
-            return info.get("chat_type", "") == "group"
-    except Exception:
-        pass
+            info = chat.ChatInfo()
+            if isinstance(info, dict):
+                return info.get("chat_type", "") == "group"
+    except Exception as e:
+        print(f"[警告] 判断群聊类型失败：{e}")
+    # 默认当作群聊处理
     return True
 
 def is_target_group(chat) -> bool:
     """群聊过滤：名字匹配"""
-    return get_chat_name(chat) == TARGET_GROUP_NAME
+    chat_name = get_chat_name(chat)
+    return chat_name == TARGET_GROUP_NAME
 
 def normalize_group_text(text: str) -> str:
     """去掉可能的"昵称: "前缀"""
@@ -143,12 +155,25 @@ def extract_question(text: str) -> Optional[str]:
     q = m.group(1).strip()
     return q if q else None
 
-def make_message_signature(msg: Message) -> Tuple[str, str, str]:
-    """消息签名用于去重"""
-    ts = str(getattr(msg, "timestamp", None) or getattr(msg, "time", None) or time.time())
-    sender = str(getattr(msg, "sender", "") or getattr(msg, "author", ""))
-    content = str(getattr(msg, "content", "") or getattr(msg, "text", ""))
-    return (ts, sender, content)
+def get_message_hash(msg: Message) -> str:
+    """
+    获取消息的hash值用于去重
+    优先使用 msg.hash 属性，若不存在则使用 msg.id
+    """
+    try:
+        # 优先使用 hash 属性（文档说明：可能重复，但切换UI后不变）
+        if hasattr(msg, "hash") and msg.hash:
+            return str(msg.hash)
+        # 降级使用 id 属性（文档说明：不重复，但切换UI后会变）
+        if hasattr(msg, "id") and msg.id:
+            return str(msg.id)
+    except Exception as e:
+        print(f"[警告] 获取消息hash失败：{e}")
+
+    # 最后使用内容和发送者的组合作为hash
+    sender = str(getattr(msg, "sender", ""))
+    content = str(getattr(msg, "content", ""))
+    return f"{sender}::{content}"
 
 def parse_dashscope_output(response) -> str:
     """健壮解析 DashScope 返回文本"""
@@ -192,36 +217,69 @@ def call_dashscope(question: str) -> str:
     answer = parse_dashscope_output(response)
     return answer if answer else "暂未获取到有效答案，请稍后再试。"
 
-def send_quote_reply(msg: Message, text: str, chat) -> bool:
+def send_quote_reply(msg: Message, text: str, chat, timeout: int = 5) -> bool:
     """
     使用引用消息回复
-    返回 True 表示成功，False 表示失败
-    """
-    try:
-        # 优先使用 msg.quote() 方法发送引用回复
-        if hasattr(msg, "quote") and callable(msg.quote):
-            msg.quote(text)
-            print(f"[引用回复成功] 使用 msg.quote 发送")
-            return True
-    except Exception as e:
-        print(f"[引用回复失败] msg.quote 异常：{e}")
 
-    # 如果引用失败，降级为普通消息发送
+    Args:
+        msg: 要引用的消息对象
+        text: 回复内容
+        chat: 聊天对象
+        timeout: 超时时间（秒）
+
+    Returns:
+        bool: True 表示成功，False 表示失败
+    """
+    # 优先使用 msg.quote() 方法发送引用回复
+    try:
+        if hasattr(msg, "quote") and callable(msg.quote):
+            # quote() 方法返回 WxResponse 对象
+            response = msg.quote(text, timeout=timeout)
+
+            # 检查返回值
+            if response and hasattr(response, "success"):
+                if response.success:
+                    print(f"[引用回复成功] 使用 msg.quote() 发送")
+                    return True
+                else:
+                    print(f"[引用回复失败] {response.message if hasattr(response, 'message') else '未知错误'}")
+            else:
+                # 如果返回值不是 WxResponse，假定成功
+                print(f"[引用回复成功] 使用 msg.quote() 发送")
+                return True
+    except Exception as e:
+        print(f"[引用回复异常] msg.quote() 调用失败：{e}")
+
+    # 如果引用失败，降级为普通消息发送（使用 chat.SendMsg）
     try:
         if hasattr(chat, "SendMsg") and callable(chat.SendMsg):
-            chat.SendMsg(text)
-            print(f"[普通回复] 使用 chat.SendMsg 发送")
+            response = chat.SendMsg(text)
+            if response and hasattr(response, "success"):
+                if response.success:
+                    print(f"[普通回复成功] 使用 chat.SendMsg() 发送")
+                    return True
+                else:
+                    print(f"[普通回复失败] {response.message if hasattr(response, 'message') else '未知错误'}")
+            else:
+                print(f"[普通回复成功] 使用 chat.SendMsg() 发送")
+                return True
+    except Exception as e:
+        print(f"[发送异常] chat.SendMsg() 调用失败：{e}")
+
+    # 最后尝试 wx.SendMsg（不推荐，因为在子窗口模式下可能不工作）
+    try:
+        response = wx.SendMsg(text)
+        if response and hasattr(response, "success"):
+            if response.success:
+                print(f"[普通回复成功] 使用 wx.SendMsg() 发送")
+                return True
+            else:
+                print(f"[普通回复失败] {response.message if hasattr(response, 'message') else '未知错误'}")
+        else:
+            print(f"[普通回复成功] 使用 wx.SendMsg() 发送")
             return True
     except Exception as e:
-        print(f"[发送失败] chat.SendMsg 异常：{e}")
-
-    # 最后尝试 wx.SendMsg
-    try:
-        wx.SendMsg(text)
-        print(f"[普通回复] 使用 wx.SendMsg 发送")
-        return True
-    except Exception as e:
-        print(f"[发送失败] wx.SendMsg 异常：{e}")
+        print(f"[发送异常] wx.SendMsg() 调用失败：{e}")
 
     return False
 
@@ -292,7 +350,7 @@ def on_message(msg: Message, chat):
             return
 
         # 消息内容提取
-        text = str(getattr(msg, "content", "") or getattr(msg, "text", "") or "")
+        text = str(getattr(msg, "content", "") or "")
         if not text.strip():
             return
 
@@ -301,20 +359,31 @@ def on_message(msg: Message, chat):
         if not question:
             return
 
+        # 消息级去重（使用 msg.hash 属性）
+        msg_hash = get_message_hash(msg)
+        if msg_hash in processed_message_hashes:
+            # print(f"[重复消息] 已忽略，hash={msg_hash[:16]}...")
+            return
+
+        # 添加到已处理集合（带大小限制）
+        if len(processed_message_hashes) >= MAX_MESSAGE_HASH_SIZE:
+            # 简单策略：清空一半
+            temp = list(processed_message_hashes)
+            processed_message_hashes.clear()
+            processed_message_hashes.update(temp[len(temp)//2:])
+            print(f"[缓存清理] 消息hash缓存已清理，当前大小：{len(processed_message_hashes)}")
+
+        processed_message_hashes.add(msg_hash)
+
         # 问题级去重
         if not remember_question_once(question):
             print(f"[重复问题] 已忽略：{question[:50]}...")
             return
 
-        # 消息级去重
-        signature = make_message_signature(msg)
-        if signature in processed_messages:
-            print(f"[重复消息] 已忽略")
-            return
-        processed_messages.add(signature)
-
         # 获取发送者信息
-        sender = str(getattr(msg, "sender", "") or getattr(msg, "author", ""))
+        sender = str(getattr(msg, "sender", ""))
+        if not sender:
+            sender = "未知用户"
 
         # 创建问题任务
         task = QuestionTask(
